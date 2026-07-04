@@ -86,7 +86,7 @@ export const processVideo = inngest.createFunction(
           }
         }
 
-        await step.fetch(env.PROCESS_VIDEO_ENDPOINT, {
+        const processResponse = await step.fetch(env.PROCESS_VIDEO_ENDPOINT, {
           method: "POST",
           body: JSON.stringify({ s3_key: s3Key }),
           headers: {
@@ -94,6 +94,15 @@ export const processVideo = inngest.createFunction(
             Authorization: `Bearer ${env.PROCESS_VIDEO_ENDPOINT_AUTH}`,
           },
         });
+
+        // step.fetch resolves on any HTTP status - without this check a 5xx
+        // from the backend would fall through and mark the row "processed"
+        // with zero clips instead of "failed".
+        if (!processResponse.ok) {
+          throw new Error(
+            `process_video endpoint returned ${processResponse.status}`,
+          );
+        }
 
         const { clipsFound } = await step.run(
           "create-clips-in-db",

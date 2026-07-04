@@ -405,6 +405,23 @@ class AiPodcastClipper:
         return json.dumps(segments)
 
     def identify_moments(self, transcript: dict):
+        from google.genai import errors as genai_errors
+
+        # Gemini preview models intermittently return 503 "high demand" -
+        # retry with backoff instead of failing the whole GPU run over a
+        # transient upstream blip.
+        last_error = None
+        for attempt in range(5):
+            try:
+                return self._identify_moments_once(transcript)
+            except genai_errors.ServerError as e:
+                last_error = e
+                wait = 2 ** attempt * 5
+                print(f"Gemini unavailable (attempt {attempt + 1}/5), retrying in {wait}s: {e}")
+                time.sleep(wait)
+        raise last_error
+
+    def _identify_moments_once(self, transcript: dict):
         response = self.gemini_client.models.generate_content(model="gemini-3-flash-preview", contents="""
     This is a podcast video transcript consisting of word, along with each words's start and end time. I am looking to create clips between a minimum of 30 and maximum of 60 seconds long. The clip should never exceed 60 seconds.
 
