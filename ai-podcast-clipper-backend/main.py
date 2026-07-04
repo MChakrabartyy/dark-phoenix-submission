@@ -453,9 +453,11 @@ class AiPodcastClipper:
             cleaned_json_string = cleaned_json_string[:-len("```")].strip()
 
         clip_moments = json.loads(cleaned_json_string)
-        if not clip_moments or not isinstance(clip_moments, list):
+        if not isinstance(clip_moments, list):
             print("Error: Identified moments is not a list")
             clip_moments = []
+        elif len(clip_moments) == 0:
+            print("No clip-worthy moments identified in this video")
 
         print(clip_moments)
 
