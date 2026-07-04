@@ -1,7 +1,11 @@
 import { env } from "~/env";
 import { inngest } from "./client";
 import { db } from "~/server/db";
-import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+import {
+  HeadObjectCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
 export const processVideo = inngest.createFunction(
   {
@@ -63,16 +67,23 @@ export const processVideo = inngest.createFunction(
         // YouTube-sourced rows have no bytes in S3 yet - download them
         // server-side first. Runs here (not in the server action) because
         // long downloads would exceed Vercel's serverless timeout, while
-        // step.fetch offloads the wait to Inngest.
+        // step.fetch offloads the wait to Inngest. Skipped when the object
+        // already exists (idempotent retries/replays).
         if (sourceUrl) {
-          await step.fetch(env.YOUTUBE_DOWNLOAD_ENDPOINT, {
-            method: "POST",
-            body: JSON.stringify({ url: sourceUrl, s3_key: s3Key }),
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${env.PROCESS_VIDEO_ENDPOINT_AUTH}`,
-            },
-          });
+          const alreadyInS3 = await step.run("check-video-in-s3", () =>
+            s3ObjectExists(s3Key),
+          );
+
+          if (!alreadyInS3) {
+            await step.fetch(env.YOUTUBE_DOWNLOAD_ENDPOINT, {
+              method: "POST",
+              body: JSON.stringify({ url: sourceUrl, s3_key: s3Key }),
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${env.PROCESS_VIDEO_ENDPOINT_AUTH}`,
+              },
+            });
+          }
         }
 
         await step.fetch(env.PROCESS_VIDEO_ENDPOINT, {
@@ -157,6 +168,25 @@ export const processVideo = inngest.createFunction(
     }
   },
 );
+
+async function s3ObjectExists(key: string) {
+  const s3Client = new S3Client({
+    region: env.AWS_REGION,
+    credentials: {
+      accessKeyId: env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+    },
+  });
+
+  try {
+    await s3Client.send(
+      new HeadObjectCommand({ Bucket: env.S3_BUCKET_NAME, Key: key }),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function listS3ObjectsByPrefix(prefix: string) {
   const s3Client = new S3Client({
