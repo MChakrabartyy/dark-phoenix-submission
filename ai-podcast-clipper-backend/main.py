@@ -57,6 +57,11 @@ image = (modal.Image.from_registry(
     # Separate layer after the heavy requirements install so adding/upgrading
     # yt-dlp never invalidates the ~40-minute torch/whisperx build cache.
     .pip_install("yt-dlp")
+    # requirements.txt leaves scenedetect unpinned; 0.6.6+ removed the
+    # scenedetect.video_manager module that the vendored TalkNet demo imports.
+    # Downgrade in an override layer (instead of editing requirements.txt)
+    # to keep the cached heavy build layer intact.
+    .pip_install("scenedetect==0.6.3")
     .add_local_dir("asd", "/asd", copy=True))
 
 app = modal.App("ai-podcast-clipper", image=image)
