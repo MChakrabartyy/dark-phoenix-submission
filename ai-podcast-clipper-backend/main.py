@@ -56,7 +56,16 @@ image = (modal.Image.from_registry(
     ])
     # Separate layer after the heavy requirements install so adding/upgrading
     # yt-dlp never invalidates the ~40-minute torch/whisperx build cache.
-    .pip_install("yt-dlp")
+    # yt-dlp[default] pulls in the EJS challenge-solver package, and deno
+    # provides the JavaScript runtime it needs - without a JS runtime YouTube's
+    # "n challenge" fails and only storyboard images are offered as formats.
+    .pip_install("yt-dlp[default]")
+    .run_commands([
+        "apt-get update && apt-get install -y unzip",
+        "curl -fsSL -o /tmp/deno.zip https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+        " || wget -O /tmp/deno.zip https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip",
+        "unzip -o /tmp/deno.zip -d /usr/local/bin && chmod +x /usr/local/bin/deno && deno --version",
+    ])
     # requirements.txt leaves scenedetect unpinned; 0.6.6+ removed the
     # scenedetect.video_manager module that the vendored TalkNet demo imports.
     # Downgrade in an override layer (instead of editing requirements.txt)
