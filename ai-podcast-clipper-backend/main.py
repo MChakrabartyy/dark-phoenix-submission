@@ -557,7 +557,10 @@ def download_youtube(request: DownloadYouTubeRequest, token: HTTPAuthorizationCr
     ydl_opts = {
         # Cap at 1080p to bound file size/processing time; merge best video+audio
         # into a single mp4 (ffmpeg is present in the image for the merge step).
-        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        # Prefer <=1080p with separate audio, but fall back broadly - exact
+        # mp4/m4a combos aren't offered for every video/player-client, and
+        # merge_output_format remuxes whatever we get into mp4 anyway.
+        "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "merge_output_format": "mp4",
         "outtmpl": str(output_path),
         "noplaylist": True,
