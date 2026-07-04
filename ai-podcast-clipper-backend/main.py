@@ -19,7 +19,11 @@ from google import genai
 
 import pysubs2
 from tqdm import tqdm
-import whisperx
+# whisperx is imported lazily inside AiPodcastClipper's methods (not here at module
+# level) so that `modal deploy`/`modal run` can import this file locally without
+# requiring torch/whisperx/pyannote-audio to be installed on the local machine.
+# Those heavy, GPU-oriented packages only ever need to exist inside the remote
+# Modal container image, which already installs them via requirements.txt.
 
 
 class ProcessVideoRequest(BaseModel):
@@ -29,7 +33,17 @@ class ProcessVideoRequest(BaseModel):
 image = (modal.Image.from_registry(
     "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11")
     .apt_install(["ffmpeg", "libgl1-mesa-glx", "wget", "libcudnn8", "libcudnn8-dev", "pkg-config", "libavformat-dev", "libavcodec-dev", "libavdevice-dev", "libavutil-dev", "libswscale-dev", "libswresample-dev", "libavfilter-dev", "clang", "build-essential", "gcc", "git"])
-    .pip_install_from_requirements("requirements.txt")
+    # whisperx's git checkout ships an old-style setup.py that imports pkg_resources
+    # during its build step. pip's isolated build environment fetches a fresh
+    # setuptools that no longer guarantees pkg_resources is importable, so we pin a
+    # known-good setuptools/wheel pair here and disable build isolation so the
+    # requirements install reuses this ambient setuptools instead. Disabling build
+    # isolation means any transitive dependency that needs a source build (e.g. the
+    # `av` package, pulled in by faster-whisper, has no prebuilt wheel here) no
+    # longer gets its declared build-time requirements auto-installed, so Cython is
+    # added here too.
+    .pip_install("setuptools<81", "wheel", "Cython")
+    .pip_install_from_requirements("requirements.txt", extra_options="--no-build-isolation")
     .run_commands([
         "mkdir -p /usr/share/fonts/truetype/custom",
         "wget -O /usr/share/fonts/truetype/custom/Anton-Regular.ttf https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
@@ -230,7 +244,20 @@ def create_subtitles_with_ffmpeg(transcript_segments: list, clip_start: float, c
 
     subs.save(subtitle_path)
 
-    ffmpeg_cmd = (f"ffmpeg -y -i {clip_video_path} -vf \"ass={subtitle_path}\" "
+    # Small, discreet LUNARTECH.AI watermark burned into the exported file itself
+    # (not a web-only overlay). Chained into the same ffmpeg pass as the subtitle
+    # burn-in to avoid a second re-encode. Placed in the upper-right safe area so
+    # it never overlaps the bottom-center captions (alignment=2, marginv=50 above)
+    # or a speaker's face. fontsize=42 on a 1080px-wide frame is ~3.9% of width,
+    # within the brief's recommended 3-5% range. Uses the Anton font already
+    # downloaded into the image for subtitles, so no new font asset is needed.
+    watermark_filter = (
+        "drawtext=fontfile=/usr/share/fonts/truetype/custom/Anton-Regular.ttf:"
+        "text='LUNARTECH.AI':fontcolor=white@0.85:fontsize=42:"
+        "x=w-tw-24:y=24:box=1:boxcolor=black@0.35:boxborderw=10"
+    )
+
+    ffmpeg_cmd = (f"ffmpeg -y -i {clip_video_path} -vf \"ass={subtitle_path},{watermark_filter}\" "
                   f"-c:v h264 -preset fast -crf 23 {output_path}")
 
     subprocess.run(ffmpeg_cmd, shell=True, check=True)
@@ -310,6 +337,8 @@ def process_clip(base_dir: str, original_video_path: str, s3_key: str, start_tim
 class AiPodcastClipper:
     @modal.enter()
     def load_model(self):
+        import whisperx
+
         print("Loading models")
 
         self.whisperx_model = whisperx.load_model(
@@ -327,6 +356,8 @@ class AiPodcastClipper:
         print("Created gemini client...")
 
     def transcribe_video(self, base_dir: str, video_path: str) -> str:
+        import whisperx
+
         audio_path = base_dir / "audio.wav"
         extract_cmd = f"ffmpeg -i {video_path} -vn -acodec pcm_s16le -ar 16000 -ac 1 {audio_path}"
         subprocess.run(extract_cmd, shell=True,
