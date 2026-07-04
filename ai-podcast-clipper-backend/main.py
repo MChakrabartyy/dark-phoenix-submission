@@ -30,6 +30,11 @@ class ProcessVideoRequest(BaseModel):
     s3_key: str
 
 
+class DownloadYouTubeRequest(BaseModel):
+    url: str
+    s3_key: str
+
+
 image = (modal.Image.from_registry(
     "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11")
     .apt_install(["ffmpeg", "libgl1-mesa-glx", "wget", "libcudnn8", "libcudnn8-dev", "pkg-config", "libavformat-dev", "libavcodec-dev", "libavdevice-dev", "libavutil-dev", "libswscale-dev", "libswresample-dev", "libavfilter-dev", "clang", "build-essential", "gcc", "git"])
@@ -49,6 +54,9 @@ image = (modal.Image.from_registry(
         "wget -O /usr/share/fonts/truetype/custom/Anton-Regular.ttf https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
         "fc-cache -f -v",
     ])
+    # Separate layer after the heavy requirements install so adding/upgrading
+    # yt-dlp never invalidates the ~40-minute torch/whisperx build cache.
+    .pip_install("yt-dlp")
     .add_local_dir("asd", "/asd", copy=True))
 
 app = modal.App("ai-podcast-clipper", image=image)
@@ -472,6 +480,81 @@ class AiPodcastClipper:
         if base_dir.exists():
             print(f"Cleaning up temp dir after {base_dir}")
             shutil.rmtree(base_dir, ignore_errors=True)
+
+
+@app.function(
+    timeout=1800,
+    secrets=[modal.Secret.from_name("ai-podcast-clipper-secret")],
+)
+@modal.fastapi_endpoint(method="POST")
+def download_youtube(request: DownloadYouTubeRequest, token: HTTPAuthorizationCredentials = Depends(auth_scheme)):
+    """Download a YouTube video server-side and upload it to S3 under the
+    caller-provided key, so the rest of the pipeline (Inngest -> process_video)
+    works identically to a browser file upload. Runs on CPU - no GPU billing
+    for downloads. Called by the frontend's Inngest function via step.fetch,
+    which tolerates long downloads that would blow Vercel's serverless timeout.
+    """
+    import yt_dlp
+
+    if token.credentials != os.environ["AUTH_TOKEN"]:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Incorrect bearer token", headers={"WWW-Authenticate": "Bearer"})
+
+    run_id = str(uuid.uuid4())
+    base_dir = pathlib.Path("/tmp") / run_id
+    base_dir.mkdir(parents=True, exist_ok=True)
+    output_path = base_dir / "original.mp4"
+
+    ydl_opts = {
+        # Cap at 1080p to bound file size/processing time; merge best video+audio
+        # into a single mp4 (ffmpeg is present in the image for the merge step).
+        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "merge_output_format": "mp4",
+        "outtmpl": str(output_path),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        # YouTube bot-checks datacenter IPs on the default web client ("Sign in
+        # to confirm you're not a bot"). The TV/Android player clients are not
+        # subject to the same check and usually work from cloud IPs.
+        "extractor_args": {"youtube": {"player_client": ["tv", "android", "web"]}},
+    }
+
+    # If a YOUTUBE_COOKIES secret is configured (Netscape cookies.txt format,
+    # exported from a logged-in browser), use it - this is the reliable way to
+    # get past YouTube's datacenter-IP bot checks.
+    cookies_data = os.environ.get("YOUTUBE_COOKIES")
+    if cookies_data:
+        cookies_path = base_dir / "cookies.txt"
+        cookies_path.write_text(cookies_data)
+        ydl_opts["cookiefile"] = str(cookies_path)
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(request.url, download=True)
+    except yt_dlp.utils.DownloadError as e:
+        shutil.rmtree(base_dir, ignore_errors=True)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"YouTube download failed: {str(e)[:500]}")
+
+    if not output_path.exists():
+        shutil.rmtree(base_dir, ignore_errors=True)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Download completed but no output file was produced")
+
+    try:
+        s3_client = boto3.client("s3")
+        s3_client.upload_file(str(output_path), os.environ["S3_BUCKET_NAME"], request.s3_key)
+    finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
+
+    return {
+        "success": True,
+        "s3_key": request.s3_key,
+        "video_id": info.get("id"),
+        "title": info.get("title"),
+        "duration": info.get("duration"),
+    }
 
 
 @app.local_entrypoint()

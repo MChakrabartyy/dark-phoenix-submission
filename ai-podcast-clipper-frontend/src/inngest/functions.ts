@@ -20,7 +20,7 @@ export const processVideo = inngest.createFunction(
     };
 
     try {
-      const { userId, credits, s3Key } = await step.run(
+      const { userId, credits, s3Key, sourceUrl } = await step.run(
         "check-credits",
         async () => {
           const uploadedFile = await db.uploadedFile.findUniqueOrThrow({
@@ -35,6 +35,7 @@ export const processVideo = inngest.createFunction(
                 },
               },
               s3Key: true,
+              sourceUrl: true,
             },
           });
 
@@ -42,6 +43,7 @@ export const processVideo = inngest.createFunction(
             userId: uploadedFile.user.id,
             credits: uploadedFile.user.credits,
             s3Key: uploadedFile.s3Key,
+            sourceUrl: uploadedFile.sourceUrl,
           };
         },
       );
@@ -57,6 +59,21 @@ export const processVideo = inngest.createFunction(
             },
           });
         });
+
+        // YouTube-sourced rows have no bytes in S3 yet - download them
+        // server-side first. Runs here (not in the server action) because
+        // long downloads would exceed Vercel's serverless timeout, while
+        // step.fetch offloads the wait to Inngest.
+        if (sourceUrl) {
+          await step.fetch(env.YOUTUBE_DOWNLOAD_ENDPOINT, {
+            method: "POST",
+            body: JSON.stringify({ url: sourceUrl, s3_key: s3Key }),
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${env.PROCESS_VIDEO_ENDPOINT_AUTH}`,
+            },
+          });
+        }
 
         await step.fetch(env.PROCESS_VIDEO_ENDPOINT, {
           method: "POST",

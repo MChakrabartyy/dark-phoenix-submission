@@ -12,11 +12,13 @@ import {
   CardHeader,
   CardTitle,
 } from "./ui/card";
-import { Loader2, UploadCloud, Video, X } from "lucide-react";
+import { Link2, Loader2, UploadCloud, Video, X } from "lucide-react";
 import { useState } from "react";
 import { generateUploadUrl } from "~/actions/s3";
 import { toast } from "sonner";
 import { processVideo } from "~/actions/generation";
+import { submitYouTubeUrl } from "~/actions/youtube";
+import { Input } from "./ui/input";
 import {
   Table,
   TableBody,
@@ -46,7 +48,34 @@ export function DashboardClient({
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [submittingUrl, setSubmittingUrl] = useState(false);
   const router = useRouter();
+
+  const handleYouTubeSubmit = async () => {
+    if (!youtubeUrl.trim()) return;
+    setSubmittingUrl(true);
+    try {
+      const result = await submitYouTubeUrl(youtubeUrl);
+      if (!result.success) {
+        toast.error("Invalid YouTube link", { description: result.error });
+        return;
+      }
+      setYoutubeUrl("");
+      toast.success("YouTube video queued", {
+        description:
+          "The video is being downloaded and processed. Check the status below.",
+        duration: 5000,
+      });
+      router.refresh();
+    } catch {
+      toast.error("Something went wrong", {
+        description: "Could not queue that video. Please try again.",
+      });
+    } finally {
+      setSubmittingUrl(false);
+    }
+  };
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -142,6 +171,47 @@ export function DashboardClient({
               </CardDescription>
             </CardHeader>
             <CardContent>
+              <div className="border-input mb-6 border p-4">
+                <div className="mb-2 flex items-center gap-2">
+                  <Link2 className="text-muted-foreground h-4 w-4" />
+                  <p className="text-sm font-medium">
+                    Process a YouTube video
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="url"
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    value={youtubeUrl}
+                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                    disabled={submittingUrl}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleYouTubeSubmit();
+                    }}
+                  />
+                  <Button
+                    disabled={!youtubeUrl.trim() || submittingUrl}
+                    onClick={handleYouTubeSubmit}
+                  >
+                    {submittingUrl ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Queuing...
+                      </>
+                    ) : (
+                      "Generate Clips"
+                    )}
+                  </Button>
+                </div>
+                <p className="text-muted-foreground mt-2 text-xs">
+                  The video is downloaded server-side - no need to upload
+                  anything yourself.
+                </p>
+              </div>
+
+              <p className="text-muted-foreground mb-2 text-sm font-medium">
+                Or upload a file
+              </p>
               <Dropzone
                 onDrop={handleDrop}
                 accept={{ "video/mp4": [".mp4"] }}
