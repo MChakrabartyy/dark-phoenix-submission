@@ -309,7 +309,14 @@ def process_clip(base_dir: str, original_video_path: str, s3_key: str, start_tim
                         f"--pretrainModel pretrain_TalkSet.model")
 
     columbia_start_time = time.time()
-    subprocess.run(columbia_command, cwd="/asd", shell=True)
+    # check=True + captured output so an ASD failure surfaces its real error
+    # instead of only manifesting later as "Tracks or scores not found".
+    asd_result = subprocess.run(columbia_command, cwd="/asd", shell=True,
+                                capture_output=True, text=True)
+    if asd_result.returncode != 0:
+        print(f"TalkNet ASD failed (exit {asd_result.returncode}):\n"
+              f"stdout: {asd_result.stdout[-2000:]}\nstderr: {asd_result.stderr[-2000:]}")
+        raise RuntimeError(f"Active-speaker detection failed for {clip_name}")
     columbia_end_time = time.time()
     print(
         f"Columbia script completed in {columbia_end_time - columbia_start_time:.2f} seconds")
