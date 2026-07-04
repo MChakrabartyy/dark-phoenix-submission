@@ -566,20 +566,21 @@ def download_youtube(request: DownloadYouTubeRequest, token: HTTPAuthorizationCr
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
-        # YouTube bot-checks datacenter IPs on the default web client ("Sign in
-        # to confirm you're not a bot"). The TV/Android player clients are not
-        # subject to the same check and usually work from cloud IPs.
-        "extractor_args": {"youtube": {"player_client": ["tv", "android", "web"]}},
     }
 
     # If a YOUTUBE_COOKIES secret is configured (Netscape cookies.txt format,
-    # exported from a logged-in browser), use it - this is the reliable way to
-    # get past YouTube's datacenter-IP bot checks.
+    # exported from a logged-in browser), use it with the default web client -
+    # this is the reliable way past YouTube's datacenter-IP bot checks. The
+    # tv/android clients don't accept cookies (they return zero formats when
+    # combined), so they're only used as the cookieless fallback.
     cookies_data = os.environ.get("YOUTUBE_COOKIES")
     if cookies_data:
         cookies_path = base_dir / "cookies.txt"
         cookies_path.write_text(cookies_data)
         ydl_opts["cookiefile"] = str(cookies_path)
+    else:
+        ydl_opts["extractor_args"] = {
+            "youtube": {"player_client": ["tv", "android", "web"]}}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
