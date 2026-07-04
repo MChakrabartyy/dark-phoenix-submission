@@ -404,26 +404,46 @@ class AiPodcastClipper:
 
         return json.dumps(segments)
 
-    def identify_moments(self, transcript: dict):
+    def identify_moments(self, transcript: list):
         from google.genai import errors as genai_errors
 
-        # Gemini preview models intermittently return 503 "high demand" -
-        # retry with backoff instead of failing the whole GPU run over a
-        # transient upstream blip.
+        # The raw list-of-dicts repr of a full podcast's word-level transcript
+        # exceeds Gemini's free-tier 250K input-tokens/minute quota in a single
+        # request, so compact each word to "start-end word" lines (~4x smaller)
+        # before sending.
+        compact_lines = []
+        for seg in transcript:
+            word = str(seg.get("word", "")).strip()
+            if not word:
+                continue
+            start = seg.get("start")
+            end = seg.get("end")
+            if start is None or end is None:
+                continue
+            compact_lines.append(f"{start:.1f}-{end:.1f} {word}")
+        compact_transcript = "\n".join(compact_lines)
+
+        # Retry transient 503s ("high demand") and per-minute 429 quota windows.
         last_error = None
         for attempt in range(5):
             try:
-                return self._identify_moments_once(transcript)
+                return self._identify_moments_once(compact_transcript)
             except genai_errors.ServerError as e:
                 last_error = e
                 wait = 2 ** attempt * 5
                 print(f"Gemini unavailable (attempt {attempt + 1}/5), retrying in {wait}s: {e}")
                 time.sleep(wait)
+            except genai_errors.ClientError as e:
+                if getattr(e, "code", None) != 429 and "429" not in str(e):
+                    raise
+                last_error = e
+                print(f"Gemini per-minute quota hit (attempt {attempt + 1}/5), waiting 65s")
+                time.sleep(65)
         raise last_error
 
-    def _identify_moments_once(self, transcript: dict):
+    def _identify_moments_once(self, transcript: str):
         response = self.gemini_client.models.generate_content(model="gemini-3-flash-preview", contents="""
-    This is a podcast video transcript consisting of word, along with each words's start and end time. I am looking to create clips between a minimum of 30 and maximum of 60 seconds long. The clip should never exceed 60 seconds.
+    This is a podcast video transcript. Each line has the format "START-END word", where START and END are that word's start and end times in seconds. I am looking to create clips between a minimum of 30 and maximum of 60 seconds long. The clip should never exceed 60 seconds.
 
     Your task is to find and extract stories, or question and their corresponding answers from the transcript.
     Each clip should begin with the question and conclude with the answer.
