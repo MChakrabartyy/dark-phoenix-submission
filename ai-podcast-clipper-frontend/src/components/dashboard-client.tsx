@@ -12,7 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "./ui/card";
-import { Loader2, UploadCloud } from "lucide-react";
+import { Loader2, UploadCloud, Video, X } from "lucide-react";
 import { useState } from "react";
 import { generateUploadUrl } from "~/actions/s3";
 import { toast } from "sonner";
@@ -56,6 +56,15 @@ export function DashboardClient({
 
   const handleDrop = (acceptedFiles: File[]) => {
     setFiles(acceptedFiles);
+  };
+
+  const handleRemoveFile = () => {
+    setFiles([]);
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const handleUpload = async () => {
@@ -142,8 +151,8 @@ export function DashboardClient({
               >
                 {(dropzone: DropzoneState) => (
                   <>
-                    <div className="flex flex-col items-center justify-center space-y-4 rounded-lg p-10 text-center">
-                      <UploadCloud className="text-muted-foreground h-12 w-12" />
+                    <div className="border-input flex flex-col items-center justify-center space-y-4 border border-dashed p-10 text-center">
+                      <UploadCloud className="text-muted-foreground h-8 w-8" />
                       <p className="font-medium">Drag and drop your file</p>
                       <p className="text-muted-foreground text-sm">
                         or click to browse (MP4 up to 500MB)
@@ -161,19 +170,42 @@ export function DashboardClient({
                 )}
               </Dropzone>
 
-              <div className="mt-2 flex items-start justify-between">
-                <div>
-                  {files.length > 0 && (
-                    <div className="space-y-1 text-sm">
-                      <p className="font-medium">Selected file:</p>
-                      {files.map((file) => (
-                        <p key={file.name} className="text-muted-foreground">
-                          {file.name}
-                        </p>
-                      ))}
+              {files.length > 0 && (
+                <div className="bg-muted relative mt-4 p-3">
+                  <div className="absolute top-1 right-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground hover:text-foreground p-2"
+                      aria-label="Remove file"
+                      disabled={uploading}
+                      onClick={handleRemoveFile}
+                    >
+                      <X className="size-4 shrink-0" aria-hidden={true} />
+                    </Button>
+                  </div>
+                  <div className="flex items-center space-x-2.5">
+                    <span className="ring-input bg-background flex h-10 w-10 shrink-0 items-center justify-center ring-1">
+                      <Video
+                        className="text-foreground size-5"
+                        aria-hidden={true}
+                      />
+                    </span>
+                    <div className="w-full">
+                      <p className="text-foreground text-xs font-medium">
+                        {files[0]!.name}
+                      </p>
+                      <p className="text-muted-foreground mt-0.5 flex justify-between text-xs">
+                        <span>{formatFileSize(files[0]!.size)}</span>
+                        <span>{uploading ? "Uploading..." : "Ready"}</span>
+                      </p>
                     </div>
-                  )}
+                  </div>
                 </div>
+              )}
+
+              <div className="mt-4 flex items-center justify-end">
                 <Button
                   disabled={files.length === 0 || uploading}
                   onClick={handleUpload}
